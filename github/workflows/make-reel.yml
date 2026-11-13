@@ -1,0 +1,60 @@
+name: make-reel
+
+on:
+  workflow_dispatch:
+    inputs:
+      script_json:
+        description: "JSON السكربت الجاي من Gemini"
+        required: true
+      row_id:
+        description: "رقم الصف في الشيت"
+        required: false
+        default: ""
+      callback_url:
+        description: "Make webhook لاستلام الرابط (اختياري)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-core jq
+          pip install edge-tts requests
+
+      - name: Generate video
+        env:
+          SCRIPT_JSON: ${{ inputs.script_json }}
+        run: python generate.py
+
+      - name: Publish release
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="reel-${{ github.run_id }}"
+          gh release create "$TAG" output/video.mp4 --title "$TAG" --notes "auto reel"
+          echo "url=https://github.com/${{ github.repository }}/releases/download/$TAG/video.mp4" >> "$GITHUB_OUTPUT"
+
+      - name: Callback to Make
+        if: ${{ inputs.callback_url != '' }}
+        run: |
+          jq -n \
+            --arg url "${{ steps.rel.outputs.url }}" \
+            --arg row "${{ inputs.row_id }}" \
+            --slurpfile meta output/meta.json \
+            '{video_url:$url, row_id:$row, title:$meta[0].title, caption:$meta[0].caption, hashtags:$meta[0].hashtags}' \
+          | curl -sS -X POST -H "Content-Type: application/json" -d @- "${{ inputs.callback_url }}"
